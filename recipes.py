@@ -1,24 +1,42 @@
-import csv
-import numpy as np
-import numpy.random as rndm
-import time
+from sklearn.decomposition import TruncatedSVD
+from blender import Blender
+from sklearn import cross_validation
 from sklearn import metrics
+from sklearn import svm
+from sklearn.ensemble import AdaBoostClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction.text import TfidfTransformer
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.pipeline import Pipeline
 from sklearn.grid_search import GridSearchCV
-from sklearn import svm
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.ensemble import AdaBoostClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import RidgeClassifier
 from sklearn.linear_model import SGDClassifier
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.pipeline import Pipeline
+import csv
+import numpy as np
+import numpy.random as rndm
+import pickle
+import pandas as pd
+import time
+# TODO: Modify use_clf s.t. it can take an optional param: random=False
+# which determines whether to use RandomSearchCV over GridSearchCV
+
+try:
+    with open('./classifiers.p', 'rb') as f:
+        classifiers = pickle.load(f)
+except IOError:
+    classifiers = {}
+
 
 def load_recipes(path):
     ''' Return a list of lists of the csv file'''
     with open(path) as c:
         reader = csv.reader(c)
         return [', '.join(row) for row in reader]
+
 
 def randomize_recipes(path):
     '''Randomizes a csv file of recipes, helps prevent patterns in the data order'''
@@ -29,6 +47,7 @@ def randomize_recipes(path):
     with open(random_file, 'w') as cr:
         writer = csv.writer(cr, delimiter=',')
         writer.writerows(recipes)
+
 
 def nationality_ingredients(recipes):
     # nationalities = [recipe[0] for recipe in recipes]
@@ -41,6 +60,7 @@ def nationality_ingredients(recipes):
         ingredients.append(splits[1])
     return np.array(nationalities), np.array(ingredients)
 
+
 def train_test(recipes):
     size = len(recipes)
     split = 2 * size // 3
@@ -51,53 +71,159 @@ def train_test(recipes):
 # randomize_recipes('data/srep00196-s3.csv')
 
 ## Split the data and transform it into frequency-based counts
-train_data, test_data = train_test(load_recipes('data/srep00196-s3random.csv'))
+train_data, test_data = cross_validation.train_test_split(
+    load_recipes('data/srep00196-s3random.csv'),
+    test_size=0.3,
+    random_state=42)
 
 y, train_X = nationality_ingredients(train_data)
 
-categories = list(set(y))
+categories = sorted(list(set(y)))
 
 
-text_clf = Pipeline([('vect', CountVectorizer()),
-                     ('tfidf', TfidfTransformer()),
-                     ('clf', SGDClassifier())])
-
-# text_clf = text_clf.fit(train_X, y)
+def create_text_pipeline(classifier):
+    return Pipeline(
+        [('vect', CountVectorizer()), ('tfidf', TfidfTransformer()),
+         ('clf', classifier)])
 
 # test data
 test_y, test_X = nationality_ingredients(test_data)
+
+
 # predicted = text_clf.predict(test_X)
+def training_data_vectorized():
+    vect = CountVectorizer()
+    tfidf = TfidfTransformer()
+    vect_X = vect.fit_transform(train_X)
+    return tfidf.fit_transform(vect_X), y
 
-# results = np.mean(predicted == np.array(test_y))
 
-# For Bayesian Classifier
-parameters = {'tfidf__use_idf': (True, False),
-              'clf__alpha': (1e-2, 1e-3)}
+def test_data_vectorized():
+    vect = CountVectorizer()
+    tfidf = TfidfTransformer()
+    vect_X = vect.fit_transform(test_X)
+    return tfidf.fit_transform(vect_X), test_y
 
-parameters = {'tfidf__use_idf': (True, False),
-              'clf__loss': ('hinge', 'log', 'modified_huber', 'squared_hinge'),
-              'clf__penalty': ('l2', 'l1', 'elasticnet'),
-              'clf__alpha': (1e-3, 1e-2, 1e-1, 1)}
 
-gs_clf = GridSearchCV(text_clf, parameters, n_jobs=3)
+def create_grid_clf(text_clf, clf_params={}, num_jobs=2):
+    parameters = {}
+    # parameters = {'tfidf__use_idf': (True, False)}
+    parameters.update(clf_params)
+    gs_clf = GridSearchCV(text_clf, parameters,
+                          n_jobs=num_jobs,
+                          error_score=-1)
+    return gs_clf
 
-def train_classifier():
-    start_time = time.time()
-    gs_clf.fit(train_X, y)
+
+def train_classifier(gs_clf, name='', verbose=True, x=train_X, y=y):
+    if verbose:
+        print('Results for: %s\n' % name)
+        start_time = time.time()
+    gs_clf.fit(x, y)
     end_time = time.time()
-    print("Time taken to train data: %r min" % ((end_time - start_time) / 60))
+    if verbose:
+        print("Time taken to train data: %r min" %
+              ((end_time - start_time) / 60))
     best_params, score, _ = max(gs_clf.grid_scores_, key=lambda x: x[1])
-    for param_name in sorted(parameters.keys()):
-        print("%s: %r" % (param_name, best_params[param_name]))
+    if verbose:
+        for param_name, value in sorted(best_params.items()):
+            print("%s: %r" % (param_name, best_params[param_name]))
 
-    predicted = gs_clf.predict(test_X)
-    print(metrics.classification_report(test_y, predicted,
-                                        target_names=categories))
+    stats, percentage, matrix = get_stats(gs_clf)
+    if verbose:
+        print(stats)
+        print('Percent Correct: {}'.format(percentage))
+        print('Confusion matrix:\n {}'.format(matrix))
+        print()
+    return gs_clf.best_estimator_
 
 
-def get_average():
-    predicted = gs_clf.predict(test_X)
-    return np.mean(predicted == test_y)
+def get_stats(clf, test_X=test_X, test_y=test_y):
+    predicted = clf.predict(test_X)
+    stats = metrics.classification_report(test_y, predicted,
+                                          target_names=categories)
+    percentage = metrics.accuracy_score(test_y, predicted)
+    y_true = pd.Series(test_y)
+    y_pred = pd.Series(predicted)
+    confusion = pd.crosstab(y_true, y_pred,
+                            rownames=['True'],
+                            colnames=['Predicted'],
+                            margins=True)
+    return stats, percentage, confusion
+
+
+def use_clf(clf, name, params={}, verbose=True, x=train_X, y=y):
+    try:
+        best_clf = classifiers[name]
+    except KeyError:
+        text_clf = create_text_pipeline(clf)
+        gs_clf = create_grid_clf(text_clf, params, num_jobs=-1)
+        best_clf = train_classifier(gs_clf, name, verbose, x, y)
+        classifiers[name] = best_clf
+    return best_clf
+
+# classifiers = {}  # Resetting for now
 
 if __name__ == '__main__':
-    train_classifier()
+    use_clf(LogisticRegression(fit_intercept=True,
+                               class_weight='auto'),
+            name='Logistic1',
+            params={
+                'clf__C': (10 ** np.arange(0, 3)),
+                'clf__solver': ('newton-cg', 'lbfgs', 'liblinear'),
+                'clf__penalty': ('l1', 'l2')
+            })
+    use_clf(MultinomialNB(fit_prior=True),
+            name='Bayes',
+            params={
+                'clf__alpha': np.arange(0, 1.0, 0.1)
+            })
+    # use_clf(RidgeClassifier(fit_intercept=True,
+    #                         solver='sparse_cg'),
+    #         name='RidgeCLF',
+    #         params={'clf__alpha': (10 ** np.arange(-2, 2))})
+    # use_clf(MultinomialNB(),
+    #         name='Bayes',
+    #         params={
+    #             'clf__alpha': (10 ** np.arange(-3, 3))
+    #         })
+    use_clf(LogisticRegression(fit_intercept=True, ),
+            name='Logistic2',
+            params={
+                'clf__C': (10 ** np.arange(0, 3)),
+                'clf__solver': ('newton-cg', 'lbfgs', 'liblinear'),
+                'clf__penalty': ('l1', 'l2')
+            })
+
+    use_clf(SVC(class_weight='auto',
+                probability=True),
+            name='SVM',
+            params={
+                'clf__C': 10 ** np.arange(-3, 3),
+                'clf__gamma': np.arange(0.0, 0.1, 0.05),
+            })
+
+    with open('./classifiers.p', 'wb') as f:
+        pickle.dump(classifiers, f)
+    clfs = classifiers.values()
+    # clf = Blender(clfs)
+    # clf.fit(train_X, y)
+    # report, percentage, confusion = get_stats(clf)
+    ## For now, just take the estimator w/ the highest probability
+    # predicted = []
+    # for data in test_X:
+    #     probabilities = [(clf, max(clf.predict_proba([data])[0]))
+    #                      for clf in clfs]
+    #     clf = sorted(probabilities, key=lambda x: x[1])[0][0]
+    #     predicted.append(clf.predict(data)[0])
+    # clf = Blender(clfs)
+    # clf.fit(train_X, y)
+    # report, accuracy, confusion = get_stats(clf)
+    # print('Blended Results:\n')
+    # print(test_y[0], predicted[0])
+    # print(len(predicted))
+    # print(len(test_y))
+    # print(metrics.accuracy_score(test_y, predicted))
+    # print(report)
+    # print(accuracy)
+    # print(confusion)
