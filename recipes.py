@@ -8,15 +8,13 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.svm import SVC
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder
-from unbalanced_dataset import UnderSampler
 import csv
 import numpy as np
 import numpy.random as rndm
 import pickle
 import pandas as pd
 import time
-# TODO: Modify use_clf s.t. it can take an optional param: random=False
-# which determines whether to use RandomSearchCV over GridSearchCV
+
 
 try:
     with open('./classifiers.p', 'rb') as f:
@@ -44,8 +42,6 @@ def randomize_recipes(path):
 
 
 def nationality_ingredients(recipes):
-    # nationalities = [recipe[0] for recipe in recipes]
-    # ingredients = [recipe[1:] for recipe in recipes]
     nationalities = []
     ingredients = []
     for recipe in recipes:
@@ -172,15 +168,6 @@ if __name__ == '__main__':
             params={
                 'clf__alpha': np.arange(0, 1.0, 0.1)
             })
-    # use_clf(RidgeClassifier(fit_intercept=True,
-    #                         solver='sparse_cg'),
-    #         name='RidgeCLF',
-    #         params={'clf__alpha': (10 ** np.arange(-2, 2))})
-    # use_clf(MultinomialNB(),
-    #         name='Bayes',
-    #         params={
-    #             'clf__alpha': (10 ** np.arange(-3, 3))
-    #         })
     use_clf(LogisticRegression(fit_intercept=True, ),
             name='Logistic2',
             params={
@@ -188,7 +175,6 @@ if __name__ == '__main__':
                 'clf__solver': ('newton-cg', 'lbfgs', 'liblinear'),
                 'clf__penalty': ('l1', 'l2')
             })
-
     use_clf(SVC(class_weight='auto',
                 probability=True),
             name='SVM',
@@ -199,25 +185,3 @@ if __name__ == '__main__':
 
     with open('./classifiers.p', 'wb') as f:
         pickle.dump(classifiers, f)
-    clfs = classifiers.values()
-    # clf = Blender(clfs)
-    # clf.fit(train_X, y)
-    # report, percentage, confusion = get_stats(clf)
-    ## For now, just take the estimator w/ the highest probability
-    # predicted = []
-    # for data in test_X:
-    #     probabilities = [(clf, max(clf.predict_proba([data])[0]))
-    #                      for clf in clfs]
-    #     clf = sorted(probabilities, key=lambda x: x[1])[0][0]
-    #     predicted.append(clf.predict(data)[0])
-    # clf = Blender(clfs)
-    # clf.fit(train_X, y)
-    # report, accuracy, confusion = get_stats(clf)
-    # print('Blended Results:\n')
-    # print(test_y[0], predicted[0])
-    # print(len(predicted))
-    # print(len(test_y))
-    # print(metrics.accuracy_score(test_y, predicted))
-    # print(report)
-    # print(accuracy)
-    # print(confusion)
